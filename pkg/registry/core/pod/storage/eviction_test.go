@@ -30,6 +30,7 @@ import (
 	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/generic"
 	genericregistry "k8s.io/apiserver/pkg/registry/generic/registry"
+	"k8s.io/apiserver/pkg/registry/rest"
 	"k8s.io/apiserver/pkg/storage"
 	etcd3testing "k8s.io/apiserver/pkg/storage/etcd3/testing"
 	"k8s.io/client-go/kubernetes/fake"
@@ -48,9 +49,10 @@ func TestEviction(t *testing.T) {
 
 		expectError   bool
 		expectDeleted bool
+		podPhase      api.PodPhase
 	}{
 		{
-			name: "matching pdbs with no disruptions allowed",
+			name: "matching pdbs with no disruptions allowed, pod running",
 			pdbs: []runtime.Object{&policyv1beta1.PodDisruptionBudget{
 				ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "default"},
 				Spec:       policyv1beta1.PodDisruptionBudgetSpec{Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"a": "true"}}},
@@ -58,6 +60,43 @@ func TestEviction(t *testing.T) {
 			}},
 			eviction:    &policy.Eviction{ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "default"}, DeleteOptions: metav1.NewDeleteOptions(0)},
 			expectError: true,
+			podPhase:    api.PodRunning,
+		},
+		{
+			name: "matching pdbs with no disruptions allowed, pod pending",
+			pdbs: []runtime.Object{&policyv1beta1.PodDisruptionBudget{
+				ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "default"},
+				Spec:       policyv1beta1.PodDisruptionBudgetSpec{Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"a": "true"}}},
+				Status:     policyv1beta1.PodDisruptionBudgetStatus{PodDisruptionsAllowed: 0},
+			}},
+			eviction:      &policy.Eviction{ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "default"}, DeleteOptions: metav1.NewDeleteOptions(0)},
+			expectError:   false,
+			podPhase:      api.PodPending,
+			expectDeleted: true,
+		},
+		{
+			name: "matching pdbs with no disruptions allowed, pod succeeded",
+			pdbs: []runtime.Object{&policyv1beta1.PodDisruptionBudget{
+				ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "default"},
+				Spec:       policyv1beta1.PodDisruptionBudgetSpec{Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"a": "true"}}},
+				Status:     policyv1beta1.PodDisruptionBudgetStatus{PodDisruptionsAllowed: 0},
+			}},
+			eviction:      &policy.Eviction{ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "default"}, DeleteOptions: metav1.NewDeleteOptions(0)},
+			expectError:   false,
+			podPhase:      api.PodSucceeded,
+			expectDeleted: true,
+		},
+		{
+			name: "matching pdbs with no disruptions allowed, pod failed",
+			pdbs: []runtime.Object{&policyv1beta1.PodDisruptionBudget{
+				ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "default"},
+				Spec:       policyv1beta1.PodDisruptionBudgetSpec{Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"a": "true"}}},
+				Status:     policyv1beta1.PodDisruptionBudgetStatus{PodDisruptionsAllowed: 0},
+			}},
+			eviction:      &policy.Eviction{ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "default"}, DeleteOptions: metav1.NewDeleteOptions(0)},
+			expectError:   false,
+			podPhase:      api.PodFailed,
+			expectDeleted: true,
 		},
 		{
 			name: "matching pdbs with disruptions allowed",
@@ -95,16 +134,23 @@ func TestEviction(t *testing.T) {
 	for _, tc := range testcases {
 		t.Run(tc.name, func(t *testing.T) {
 			testContext := genericapirequest.WithNamespace(genericapirequest.NewContext(), metav1.NamespaceDefault)
-			storage, _, _, server := newStorage(t)
+			storage, _, statusStorage, server := newStorage(t)
 			defer server.Terminate(t)
 			defer storage.Store.DestroyFunc()
 
 			pod := validNewPod()
 			pod.Labels = map[string]string{"a": "true"}
 			pod.Spec.NodeName = "foo"
-
 			if _, err := storage.Create(testContext, pod, nil, &metav1.CreateOptions{}); err != nil {
 				t.Error(err)
+			}
+
+			if tc.podPhase != "" {
+				pod.Status.Phase = tc.podPhase
+				_, _, err := statusStorage.Update(testContext, pod.Name, rest.DefaultUpdatedObjectInfo(pod), rest.ValidateAllObjectFunc, rest.ValidateAllObjectUpdateFunc, false, &metav1.UpdateOptions{})
+				if err != nil {
+					t.Errorf("Unexpected error: %v", err)
+				}
 			}
 
 			client := fake.NewSimpleClientset(tc.pdbs...)
