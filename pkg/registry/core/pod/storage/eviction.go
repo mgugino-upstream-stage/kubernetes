@@ -130,7 +130,7 @@ func (r *EvictionREST) Create(ctx context.Context, name string, obj runtime.Obje
 
 	// Evicting a terminal pod should result in direct deletion of pod as it already caused disruption by the time we are evicting.
 	// There is no need to check for pdb.
-	if pod.Status.Phase == api.PodSucceeded || pod.Status.Phase == api.PodFailed {
+	if canIgnorePDB(pod) {
 		_, _, err = r.store.Delete(ctx, eviction.Name, rest.ValidateAllObjectFunc, deletionOptions)
 		if err != nil {
 			return nil, err
@@ -201,6 +201,15 @@ func (r *EvictionREST) Create(ctx context.Context, name string, obj runtime.Obje
 
 	// Success!
 	return &metav1.Status{Status: metav1.StatusSuccess}, nil
+}
+
+// canIgnorePDB returns true for pod conditions that allow the pod to be deleted
+// without checking PDBs.
+func canIgnorePDB(pod *api.Pod) bool {
+	if pod.Status.Phase == api.PodSucceeded || pod.Status.Phase == api.PodFailed || pod.Status.Phase == api.PodPending {
+		return true
+	}
+	return false
 }
 
 // checkAndDecrement checks if the provided PodDisruptionBudget allows any disruption.
