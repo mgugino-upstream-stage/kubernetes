@@ -17,6 +17,7 @@ limitations under the License.
 package drain
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"math"
@@ -194,11 +195,28 @@ func (d *Helper) DeleteOrEvictPods(pods []corev1.Pod) error {
 
 func (d *Helper) evictPods(pods []corev1.Pod, policyGroupVersion string, getPodFn func(namespace, name string) (*corev1.Pod, error)) error {
 	returnCh := make(chan error, 1)
-
+	// 0 timeout means infinite, we use MaxInt64 to represent it.
+	var globalTimeout time.Duration
+	if d.Timeout == 0 {
+		globalTimeout = time.Duration(math.MaxInt64)
+	} else {
+		globalTimeout = d.Timeout
+	}
+	ctx, cancel := context.WithTimeout(context.TODO(), globalTimeout)
+	defer cancel()
 	for _, pod := range pods {
 		go func(pod corev1.Pod, returnCh chan error) {
 			for {
 				fmt.Fprintf(d.Out, "evicting pod %q\n", pod.Name)
+				select {
+				case <-ctx.Done():
+					// return here or we'll leak a goroutine.
+					returnCh <- fmt.Errorf("error when evicting pod %q: global timeout", pod.Name)
+					return
+				default:
+					// break the select.
+					break
+				}
 				err := d.EvictPod(pod, policyGroupVersion)
 				if err == nil {
 					break
@@ -225,14 +243,8 @@ func (d *Helper) evictPods(pods []corev1.Pod, policyGroupVersion string, getPodF
 	doneCount := 0
 	var errors []error
 
-	// 0 timeout means infinite, we use MaxInt64 to represent it.
-	var globalTimeout time.Duration
-	if d.Timeout == 0 {
-		globalTimeout = time.Duration(math.MaxInt64)
-	} else {
-		globalTimeout = d.Timeout
-	}
 	globalTimeoutCh := time.After(globalTimeout)
+
 	numPods := len(pods)
 	for doneCount < numPods {
 		select {
@@ -242,9 +254,11 @@ func (d *Helper) evictPods(pods []corev1.Pod, policyGroupVersion string, getPodF
 				errors = append(errors, err)
 			}
 		case <-globalTimeoutCh:
-			return fmt.Errorf("drain did not complete within %v", globalTimeout)
+			errors = append(errors, fmt.Errorf("drain did not complete within %v", globalTimeout))
+			return utilerrors.NewAggregate(errors)
 		}
 	}
+
 	return utilerrors.NewAggregate(errors)
 }
 
