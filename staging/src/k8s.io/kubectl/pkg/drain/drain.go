@@ -22,6 +22,9 @@ import (
 	"io"
 	"math"
 	"time"
+	"runtime"
+
+	"runtime/pprof"
 
 	corev1 "k8s.io/api/core/v1"
 	policyv1beta1 "k8s.io/api/policy/v1beta1"
@@ -185,15 +188,30 @@ func (d *Helper) DeleteOrEvictPods(pods []corev1.Pod) error {
 	getPodFn := func(namespace, name string) (*corev1.Pod, error) {
 		return d.Client.CoreV1().Pods(namespace).Get(name, metav1.GetOptions{})
 	}
-
+	fmt.Println("Number of goroutines before evictPods: ", runtime.NumGoroutine())
 	if len(policyGroupVersion) > 0 {
-		return d.evictPods(pods, policyGroupVersion, getPodFn)
+		err := d.evictPods(pods, policyGroupVersion, getPodFn)
+		time.Sleep(5 * time.Second)
+		fmt.Println("Number of goroutines after evictPods: ", runtime.NumGoroutine())
+		err = d.evictPods(pods, policyGroupVersion, getPodFn)
+		time.Sleep(5 * time.Second)
+		fmt.Println("Number of goroutines after evictPods2: ", runtime.NumGoroutine())
+
+		err = d.evictPods(pods, policyGroupVersion, getPodFn)
+		time.Sleep(5 * time.Second)
+		fmt.Println("Number of goroutines after evictPods3: ", runtime.NumGoroutine())
+
+
+	   pprof.Lookup("goroutine").WriteTo(d.ErrOut, 2)
+
+		return err
 	}
 
 	return d.deletePods(pods, getPodFn)
 }
 
 func (d *Helper) evictPods(pods []corev1.Pod, policyGroupVersion string, getPodFn func(namespace, name string) (*corev1.Pod, error)) error {
+	fmt.Println("Number of goroutines starting evictPods: ", runtime.NumGoroutine())
 	returnCh := make(chan error, 1)
 	// 0 timeout means infinite, we use MaxInt64 to represent it.
 	var globalTimeout time.Duration
@@ -231,7 +249,7 @@ func (d *Helper) evictPods(pods []corev1.Pod, policyGroupVersion string, getPodF
 					return
 				}
 			}
-			_, err := waitForDelete([]corev1.Pod{pod}, 1*time.Second, time.Duration(math.MaxInt64), true, getPodFn, d.OnPodDeletedOrEvicted)
+			_, err := waitForDelete([]corev1.Pod{pod}, 1*time.Second, time.Duration(math.MaxInt64), true, getPodFn, d.OnPodDeletedOrEvicted, ctx)
 			if err == nil {
 				returnCh <- nil
 			} else {
@@ -276,11 +294,13 @@ func (d *Helper) deletePods(pods []corev1.Pod, getPodFn func(namespace, name str
 			return err
 		}
 	}
-	_, err := waitForDelete(pods, 1*time.Second, globalTimeout, false, getPodFn, d.OnPodDeletedOrEvicted)
+	ctx := context.TODO()
+	_, err := waitForDelete(pods, 1*time.Second, globalTimeout, false, getPodFn, d.OnPodDeletedOrEvicted, ctx)
 	return err
 }
 
-func waitForDelete(pods []corev1.Pod, interval, timeout time.Duration, usingEviction bool, getPodFn func(string, string) (*corev1.Pod, error), onDoneFn func(pod *corev1.Pod, usingEviction bool)) ([]corev1.Pod, error) {
+func waitForDelete(pods []corev1.Pod, interval, timeout time.Duration, usingEviction bool, getPodFn func(string, string) (*corev1.Pod, error), onDoneFn func(pod *corev1.Pod, usingEviction bool), ctx context.Context) ([]corev1.Pod, error) {
+	fmt.Println("Wait for delete go!")
 	err := wait.PollImmediate(interval, timeout, func() (bool, error) {
 		pendingPods := []corev1.Pod{}
 		for i, pod := range pods {
@@ -298,9 +318,20 @@ func waitForDelete(pods []corev1.Pod, interval, timeout time.Duration, usingEvic
 		}
 		pods = pendingPods
 		if len(pendingPods) > 0 {
+
+			select {
+			case <-ctx.Done():
+				fmt.Println("hit ctx done waitfordelete")
+				return false, fmt.Errorf("waitForDelete global timeout")
+			default:
+				return false, nil
+			}
+
 			return false, nil
+
 		}
 		return true, nil
 	})
+	fmt.Println("Made it to end of wait for delete")
 	return pods, err
 }
