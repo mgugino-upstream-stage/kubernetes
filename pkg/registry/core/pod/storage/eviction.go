@@ -131,6 +131,14 @@ func (r *EvictionREST) Create(ctx context.Context, name string, obj runtime.Obje
 	// Evicting a terminal pod should result in direct deletion of pod as it already caused disruption by the time we are evicting.
 	// There is no need to check for pdb.
 	if canIgnorePDB(pod) {
+		if shouldEnforceResourceVersion(pod) {
+			// Set deletionOptions.Preconditions.ResourceVersion to ensure we're not
+			// racing with another PDB-impacting process elsewhere.
+			if deletionOptions.Preconditions == nil {
+				deletionOptions.Preconditions = &metav1.Preconditions{}
+			}
+			deletionOptions.Preconditions.ResourceVersion = &pod.ResourceVersion
+		}
 		_, _, err = r.store.Delete(ctx, eviction.Name, rest.ValidateAllObjectFunc, deletionOptions)
 		if err != nil {
 			return nil, err
@@ -207,6 +215,14 @@ func (r *EvictionREST) Create(ctx context.Context, name string, obj runtime.Obje
 // without checking PDBs.
 func canIgnorePDB(pod *api.Pod) bool {
 	if pod.Status.Phase == api.PodSucceeded || pod.Status.Phase == api.PodFailed || pod.Status.Phase == api.PodPending {
+		return true
+	}
+	return false
+}
+
+func shouldEnforceResourceVersion(pod *api.Pod) bool {
+	// Only pods that may be included as health in PDBs in the future need to be checked.
+	if pod.Status.Phase == api.PodPending {
 		return true
 	}
 	return false
