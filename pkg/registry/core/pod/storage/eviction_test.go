@@ -50,6 +50,7 @@ func TestEviction(t *testing.T) {
 		expectError   bool
 		expectDeleted bool
 		podPhase      api.PodPhase
+		podName       string
 	}{
 		{
 			name: "matching pdbs with no disruptions allowed, pod running",
@@ -58,9 +59,10 @@ func TestEviction(t *testing.T) {
 				Spec:       policyv1beta1.PodDisruptionBudgetSpec{Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"a": "true"}}},
 				Status:     policyv1beta1.PodDisruptionBudgetStatus{PodDisruptionsAllowed: 0},
 			}},
-			eviction:    &policy.Eviction{ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "default"}, DeleteOptions: metav1.NewDeleteOptions(0)},
+			eviction:    &policy.Eviction{ObjectMeta: metav1.ObjectMeta{Name: "t1", Namespace: "default"}, DeleteOptions: metav1.NewDeleteOptions(0)},
 			expectError: true,
 			podPhase:    api.PodRunning,
+			podName:     "t1",
 		},
 		{
 			name: "matching pdbs with no disruptions allowed, pod pending",
@@ -69,10 +71,11 @@ func TestEviction(t *testing.T) {
 				Spec:       policyv1beta1.PodDisruptionBudgetSpec{Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"a": "true"}}},
 				Status:     policyv1beta1.PodDisruptionBudgetStatus{PodDisruptionsAllowed: 0},
 			}},
-			eviction:      &policy.Eviction{ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "default"}, DeleteOptions: metav1.NewDeleteOptions(0)},
+			eviction:      &policy.Eviction{ObjectMeta: metav1.ObjectMeta{Name: "t2", Namespace: "default"}, DeleteOptions: metav1.NewDeleteOptions(0)},
 			expectError:   false,
 			podPhase:      api.PodPending,
 			expectDeleted: true,
+			podName:       "t2",
 		},
 		{
 			name: "matching pdbs with no disruptions allowed, pod succeeded",
@@ -81,10 +84,11 @@ func TestEviction(t *testing.T) {
 				Spec:       policyv1beta1.PodDisruptionBudgetSpec{Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"a": "true"}}},
 				Status:     policyv1beta1.PodDisruptionBudgetStatus{PodDisruptionsAllowed: 0},
 			}},
-			eviction:      &policy.Eviction{ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "default"}, DeleteOptions: metav1.NewDeleteOptions(0)},
+			eviction:      &policy.Eviction{ObjectMeta: metav1.ObjectMeta{Name: "t3", Namespace: "default"}, DeleteOptions: metav1.NewDeleteOptions(0)},
 			expectError:   false,
 			podPhase:      api.PodSucceeded,
 			expectDeleted: true,
+			podName:       "t3",
 		},
 		{
 			name: "matching pdbs with no disruptions allowed, pod failed",
@@ -93,10 +97,11 @@ func TestEviction(t *testing.T) {
 				Spec:       policyv1beta1.PodDisruptionBudgetSpec{Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"a": "true"}}},
 				Status:     policyv1beta1.PodDisruptionBudgetStatus{PodDisruptionsAllowed: 0},
 			}},
-			eviction:      &policy.Eviction{ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "default"}, DeleteOptions: metav1.NewDeleteOptions(0)},
+			eviction:      &policy.Eviction{ObjectMeta: metav1.ObjectMeta{Name: "t4", Namespace: "default"}, DeleteOptions: metav1.NewDeleteOptions(0)},
 			expectError:   false,
 			podPhase:      api.PodFailed,
 			expectDeleted: true,
+			podName:       "t4",
 		},
 		{
 			name: "matching pdbs with disruptions allowed",
@@ -105,8 +110,9 @@ func TestEviction(t *testing.T) {
 				Spec:       policyv1beta1.PodDisruptionBudgetSpec{Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"a": "true"}}},
 				Status:     policyv1beta1.PodDisruptionBudgetStatus{PodDisruptionsAllowed: 1},
 			}},
-			eviction:      &policy.Eviction{ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "default"}, DeleteOptions: metav1.NewDeleteOptions(0)},
+			eviction:      &policy.Eviction{ObjectMeta: metav1.ObjectMeta{Name: "t5", Namespace: "default"}, DeleteOptions: metav1.NewDeleteOptions(0)},
 			expectDeleted: true,
+			podName:       "t5",
 		},
 		{
 			name: "non-matching pdbs",
@@ -115,8 +121,9 @@ func TestEviction(t *testing.T) {
 				Spec:       policyv1beta1.PodDisruptionBudgetSpec{Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"b": "true"}}},
 				Status:     policyv1beta1.PodDisruptionBudgetStatus{PodDisruptionsAllowed: 0},
 			}},
-			eviction:      &policy.Eviction{ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "default"}, DeleteOptions: metav1.NewDeleteOptions(0)},
+			eviction:      &policy.Eviction{ObjectMeta: metav1.ObjectMeta{Name: "t6", Namespace: "default"}, DeleteOptions: metav1.NewDeleteOptions(0)},
 			expectDeleted: true,
+			podName:       "t6",
 		},
 		{
 			name: "matching pdbs with disruptions allowed but bad name in Url",
@@ -126,8 +133,9 @@ func TestEviction(t *testing.T) {
 				Status:     policyv1beta1.PodDisruptionBudgetStatus{PodDisruptionsAllowed: 1},
 			}},
 			badNameInURL: true,
-			eviction:     &policy.Eviction{ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "default"}, DeleteOptions: metav1.NewDeleteOptions(0)},
+			eviction:     &policy.Eviction{ObjectMeta: metav1.ObjectMeta{Name: "t7", Namespace: "default"}, DeleteOptions: metav1.NewDeleteOptions(0)},
 			expectError:  true,
+			podName:      "t7",
 		},
 	}
 
@@ -139,6 +147,7 @@ func TestEviction(t *testing.T) {
 			defer storage.Store.DestroyFunc()
 
 			pod := validNewPod()
+			pod.Name = tc.podName
 			pod.Labels = map[string]string{"a": "true"}
 			pod.Spec.NodeName = "foo"
 			if _, err := storage.Create(testContext, pod, nil, &metav1.CreateOptions{}); err != nil {
@@ -160,9 +169,11 @@ func TestEviction(t *testing.T) {
 			if tc.badNameInURL {
 				name += "bad-name"
 			}
+
 			_, err := evictionRest.Create(testContext, name, tc.eviction, nil, &metav1.CreateOptions{})
+			//_, err = evictionRest.Create(testContext, name, tc.eviction, nil, &metav1.CreateOptions{})
 			if (err != nil) != tc.expectError {
-				t.Errorf("expected error=%v, got %v", tc.expectError, err)
+				t.Errorf("expected error=%v, got %v; name %v", tc.expectError, err, pod.Name)
 				return
 			}
 			if tc.badNameInURL {
