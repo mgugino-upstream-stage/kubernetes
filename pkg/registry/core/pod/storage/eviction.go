@@ -139,12 +139,37 @@ func (r *EvictionREST) Create(ctx context.Context, name string, obj runtime.Obje
 			}
 			deletionOptions.Preconditions.ResourceVersion = &pod.ResourceVersion
 		}
-		_, _, err = r.store.Delete(ctx, eviction.Name, rest.ValidateAllObjectFunc, deletionOptions)
-		if err != nil {
-			return nil, err
+		deleteRefresh := false
+		continueToPDBs := false
+		err := retry.RetryOnConflict(EvictionsRetry, func() error {
+			if deleteRefresh {
+				// If we hit a conflict error, get the latest pod
+				obj, err = r.store.Get(ctx, eviction.Name, &metav1.GetOptions{})
+				if err != nil {
+					return err
+				}
+				pod = obj.(*api.Pod)
+				if !canIgnorePDB(pod) {
+					// Pod is no longer in a state where we can skip checking
+					// PDBs, continue to PDB checks.
+					continueToPDBs = true
+					return nil
+				}
+			}
+			_, _, err = r.store.Delete(ctx, eviction.Name, rest.ValidateAllObjectFunc, deletionOptions)
+			if err != nil {
+				deleteRefresh = true
+				return err
+			}
+			return nil
+		})
+		if !continueToPDBs {
+			if err != nil {
+				return nil, err
+			}
+			return &metav1.Status{
+				Status: metav1.StatusSuccess}, nil
 		}
-		return &metav1.Status{
-			Status: metav1.StatusSuccess}, nil
 	}
 	var rtStatus *metav1.Status
 	var pdbName string
