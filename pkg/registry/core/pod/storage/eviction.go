@@ -29,7 +29,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/wait"
-	genericregistry "k8s.io/apiserver/pkg/registry/generic/registry"
 	"k8s.io/apiserver/pkg/registry/rest"
 	"k8s.io/apiserver/pkg/util/dryrun"
 	policyclient "k8s.io/client-go/kubernetes/typed/policy/v1beta1"
@@ -46,24 +45,25 @@ const (
 	// This situation should self-correct because the PDB controller removes
 	// entries from the map automatically after the PDB DeletionTimeout regardless.
 	MaxDisruptedPodSize = 2000
+	retrySteps          = 20
 )
 
 // EvictionsRetry is the retry for a conflict where multiple clients
 // are making changes to the same resource.
 var EvictionsRetry = wait.Backoff{
-	Steps:    20,
+	Steps:    retrySteps,
 	Duration: 500 * time.Millisecond,
 	Factor:   1.0,
 	Jitter:   0.1,
 }
 
-func newEvictionStorage(store *genericregistry.Store, podDisruptionBudgetClient policyclient.PodDisruptionBudgetsGetter) *EvictionREST {
+func newEvictionStorage(store rest.StandardStorage, podDisruptionBudgetClient policyclient.PodDisruptionBudgetsGetter) *EvictionREST {
 	return &EvictionREST{store: store, podDisruptionBudgetClient: podDisruptionBudgetClient}
 }
 
 // EvictionREST implements the REST endpoint for evicting pods from nodes
 type EvictionREST struct {
-	store                     *genericregistry.Store
+	store                     rest.StandardStorage
 	podDisruptionBudgetClient policyclient.PodDisruptionBudgetsGetter
 }
 
