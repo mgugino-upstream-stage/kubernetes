@@ -23,9 +23,11 @@ import (
 	policyv1beta1 "k8s.io/api/policy/v1beta1"
 	"k8s.io/apimachinery/pkg/api/apitesting"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metainternalversion "k8s.io/apimachinery/pkg/apis/meta/internalversion"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
+	"k8s.io/apimachinery/pkg/watch"
 	examplev1 "k8s.io/apiserver/pkg/apis/example/v1"
 	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/generic"
@@ -245,6 +247,119 @@ func newFailDeleteUpdateStorage(t *testing.T) (*REST, *etcd3testing.EtcdTestServ
 		Codec:   apitesting.TestStorageCodec(codecs, examplev1.SchemeGroupVersion),
 	}
 	return storage.Pod, server
+}
+
+type mockStore struct {
+	callCount int
+}
+
+//func (ms *mockStore)
+
+func (ms *mockStore) Watch(ctx context.Context, options *metainternalversion.ListOptions) (watch.Interface, error) {
+	return nil, nil
+}
+
+func (ms *mockStore) Update(ctx context.Context, name string, objInfo rest.UpdatedObjectInfo, createValidation rest.ValidateObjectFunc, updateValidation rest.ValidateObjectUpdateFunc, forceAllowCreate bool, options *metav1.UpdateOptions) (runtime.Object, bool, error) {
+	return nil, false, nil
+}
+
+func (ms *mockStore) Delete(ctx context.Context, name string, deleteValidation rest.ValidateObjectFunc, options *metav1.DeleteOptions) (runtime.Object, bool, error) {
+	return nil, false, nil
+}
+
+func (ms *mockStore) Get(ctx context.Context, name string, options *metav1.GetOptions) (runtime.Object, error) {
+	return nil, nil
+}
+
+func (ms *mockStore) New() runtime.Object {
+	return nil
+}
+
+func (ms *mockStore) Create(ctx context.Context, obj runtime.Object, createValidation rest.ValidateObjectFunc, options *metav1.CreateOptions) (runtime.Object, error) {
+	return nil, nil
+}
+
+func (ms *mockStore) DeleteCollection(ctx context.Context, deleteValidation rest.ValidateObjectFunc, options *metav1.DeleteOptions, listOptions *metainternalversion.ListOptions) (runtime.Object, error) {
+	return nil, nil
+}
+
+func (ms *mockStore) List(ctx context.Context, options *metainternalversion.ListOptions) (runtime.Object, error) {
+	return nil, nil
+}
+
+func (ms *mockStore) NewList() runtime.Object {
+	return nil
+}
+
+func TestEvictionIngorePDB(t *testing.T) {
+	testcases := []struct {
+		name     string
+		pdbs     []runtime.Object
+		eviction *policy.Eviction
+
+		expectError   bool
+		expectDeleted bool
+		podPhase      api.PodPhase
+		podName       string
+	}{
+		{
+			name: "matching pdbs with no disruptions allowed, pod running",
+			pdbs: []runtime.Object{&policyv1beta1.PodDisruptionBudget{
+				ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "default"},
+				Spec:       policyv1beta1.PodDisruptionBudgetSpec{Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"a": "true"}}},
+				Status:     policyv1beta1.PodDisruptionBudgetStatus{PodDisruptionsAllowed: 0},
+			}},
+			eviction:    &policy.Eviction{ObjectMeta: metav1.ObjectMeta{Name: "t1", Namespace: "default"}, DeleteOptions: metav1.NewDeleteOptions(0)},
+			expectError: true,
+			podPhase:    api.PodRunning,
+			podName:     "t1",
+		},
+		{
+			name: "matching pdbs with no disruptions allowed, pod pending",
+			pdbs: []runtime.Object{&policyv1beta1.PodDisruptionBudget{
+				ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "default"},
+				Spec:       policyv1beta1.PodDisruptionBudgetSpec{Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"a": "true"}}},
+				Status:     policyv1beta1.PodDisruptionBudgetStatus{PodDisruptionsAllowed: 0},
+			}},
+			eviction:      &policy.Eviction{ObjectMeta: metav1.ObjectMeta{Name: "t2", Namespace: "default"}, DeleteOptions: metav1.NewDeleteOptions(0)},
+			expectError:   false,
+			podPhase:      api.PodPending,
+			expectDeleted: true,
+			podName:       "t2",
+		},
+	}
+
+	for _, tc := range testcases {
+		t.Run(tc.name, func(t *testing.T) {
+			testContext := genericapirequest.WithNamespace(genericapirequest.NewContext(), metav1.NamespaceDefault)
+			//storage, _, statusStorage, server := newStorage(t)
+			ms := &mockStore{
+				callCount: 0,
+			}
+
+			pod := validNewPod()
+			pod.Name = tc.podName
+			pod.Labels = map[string]string{"a": "true"}
+			pod.Spec.NodeName = "foo"
+
+			client := fake.NewSimpleClientset(tc.pdbs...)
+			evictionRest := newEvictionStorage(ms, client.PolicyV1beta1())
+
+			name := pod.Name
+
+			_, err := evictionRest.Create(testContext, name, tc.eviction, nil, &metav1.CreateOptions{})
+			//_, err = evictionRest.Create(testContext, name, tc.eviction, nil, &metav1.CreateOptions{})
+			if (err != nil) != tc.expectError {
+				t.Errorf("expected error=%v, got %v; name %v", tc.expectError, err, pod.Name)
+				return
+			}
+
+			if tc.expectError {
+				return
+			}
+
+		})
+	}
 }
 
 func TestEvictionDryRun(t *testing.T) {
