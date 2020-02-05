@@ -131,16 +131,10 @@ func (r *EvictionREST) Create(ctx context.Context, name string, obj runtime.Obje
 	// Evicting a terminal pod should result in direct deletion of pod as it already caused disruption by the time we are evicting.
 	// There is no need to check for pdb.
 	if canIgnorePDB(pod) {
-		if shouldEnforceResourceVersion(pod) {
-			// Set deletionOptions.Preconditions.ResourceVersion to ensure we're not
-			// racing with another PDB-impacting process elsewhere.
-			if deletionOptions.Preconditions == nil {
-				deletionOptions.Preconditions = &metav1.Preconditions{}
-			}
-			deletionOptions.Preconditions.ResourceVersion = &pod.ResourceVersion
-		}
 		deleteRefresh := false
 		continueToPDBs := false
+		// Preserve current deletion options if we need to confirm fall through to checking PDBs later.
+		preservedDeletionOptions := deletionOptions.DeepCopy()
 		err := retry.RetryOnConflict(EvictionsRetry, func() error {
 			if deleteRefresh {
 				// If we hit a conflict error, get the latest pod
@@ -153,8 +147,23 @@ func (r *EvictionREST) Create(ctx context.Context, name string, obj runtime.Obje
 					// Pod is no longer in a state where we can skip checking
 					// PDBs, continue to PDB checks.
 					continueToPDBs = true
+					// restore original deletion options because we may have
+					// modified them.
+					deletionOptions = preservedDeletionOptions
 					return nil
 				}
+			}
+			if shouldEnforceResourceVersion(pod) {
+				// Set deletionOptions.Preconditions.ResourceVersion to ensure we're not
+				// racing with another PDB-impacting process elsewhere.
+				if deletionOptions.Preconditions == nil {
+					deletionOptions.Preconditions = &metav1.Preconditions{}
+				}
+				deletionOptions.Preconditions.ResourceVersion = &pod.ResourceVersion
+			} else {
+				// restore original deletion options because we may have
+				// modified them.
+				deletionOptions = preservedDeletionOptions
 			}
 			_, _, err = r.store.Delete(ctx, eviction.Name, rest.ValidateAllObjectFunc, deletionOptions)
 			if err != nil {
