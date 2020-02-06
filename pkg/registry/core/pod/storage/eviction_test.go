@@ -258,27 +258,20 @@ func TestEvictionIngorePDB(t *testing.T) {
 		expectError         bool
 		podPhase            api.PodPhase
 		podName             string
-		deleteFunc          deleteFunc
 		expectedDeleteCount int
 	}{
 		{
-			name: "pod pending, first delete conflict, pod becomes non pending, continueToPDBs",
+			name: "pdbs No disruptions allowed, pod pending, first delete conflict, pod still pending, pod deleted successfully",
 			pdbs: []runtime.Object{&policyv1beta1.PodDisruptionBudget{
 				ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "default"},
 				Spec:       policyv1beta1.PodDisruptionBudgetSpec{Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"a": "true"}}},
 				Status:     policyv1beta1.PodDisruptionBudgetStatus{DisruptionsAllowed: 0},
 			}},
-			eviction:    &policy.Eviction{ObjectMeta: metav1.ObjectMeta{Name: "t1", Namespace: "default"}, DeleteOptions: metav1.NewDeleteOptions(0)},
-			expectError: false,
-			podPhase:    api.PodPending,
-			podName:     "t1",
-			deleteFunc: func(count int) (runtime.Object, bool, error) {
-				if count == 1 {
-					return nil, false, apierrors.NewConflict(resource("tests"), "2", errors.New("message"))
-				}
-				return nil, true, nil
-			},
-			expectedDeleteCount: 2,
+			eviction:            &policy.Eviction{ObjectMeta: metav1.ObjectMeta{Name: "t1", Namespace: "default"}, DeleteOptions: metav1.NewDeleteOptions(0)},
+			expectError:         false,
+			podPhase:            api.PodPending,
+			podName:             "t1",
+			expectedDeleteCount: 3,
 		},
 		// This test case is critical.  If it is removed or broken we may
 		// regress and allow a pod to be deleted without checking PDBs when the
@@ -294,8 +287,20 @@ func TestEvictionIngorePDB(t *testing.T) {
 			expectError:         true,
 			podPhase:            api.PodPending,
 			podName:             "t2",
-			deleteFunc:          nil,
 			expectedDeleteCount: 1,
+		},
+		{
+			name: "pdbs disruptions allowed, pod pending, first delete conflict, pod becomes running, continueToPDBs",
+			pdbs: []runtime.Object{&policyv1beta1.PodDisruptionBudget{
+				ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "default"},
+				Spec:       policyv1beta1.PodDisruptionBudgetSpec{Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"a": "true"}}},
+				Status:     policyv1beta1.PodDisruptionBudgetStatus{DisruptionsAllowed: 1},
+			}},
+			eviction:            &policy.Eviction{ObjectMeta: metav1.ObjectMeta{Name: "t3", Namespace: "default"}, DeleteOptions: metav1.NewDeleteOptions(0)},
+			expectError:         false,
+			podPhase:            api.PodPending,
+			podName:             "t3",
+			expectedDeleteCount: 2,
 		},
 		{
 			name: "pod pending, always conflict on delete",
@@ -304,13 +309,23 @@ func TestEvictionIngorePDB(t *testing.T) {
 				Spec:       policyv1beta1.PodDisruptionBudgetSpec{Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"a": "true"}}},
 				Status:     policyv1beta1.PodDisruptionBudgetStatus{DisruptionsAllowed: 0},
 			}},
-			eviction:    &policy.Eviction{ObjectMeta: metav1.ObjectMeta{Name: "t3", Namespace: "default"}, DeleteOptions: metav1.NewDeleteOptions(0)},
-			expectError: true,
-			podPhase:    api.PodPending,
-			podName:     "t3",
-			deleteFunc: func(count int) (runtime.Object, bool, error) {
-				return nil, false, apierrors.NewConflict(resource("tests"), "2", errors.New("message"))
-			},
+			eviction:            &policy.Eviction{ObjectMeta: metav1.ObjectMeta{Name: "t4", Namespace: "default"}, DeleteOptions: metav1.NewDeleteOptions(0)},
+			expectError:         true,
+			podPhase:            api.PodPending,
+			podName:             "t4",
+			expectedDeleteCount: retrySteps,
+		},
+		{
+			name: "pod pending, always conflict on delete, user provided ResourceVersion constraint",
+			pdbs: []runtime.Object{&policyv1beta1.PodDisruptionBudget{
+				ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "default"},
+				Spec:       policyv1beta1.PodDisruptionBudgetSpec{Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"a": "true"}}},
+				Status:     policyv1beta1.PodDisruptionBudgetStatus{DisruptionsAllowed: 0},
+			}},
+			eviction:            &policy.Eviction{ObjectMeta: metav1.ObjectMeta{Name: "t5", Namespace: "default"}, DeleteOptions: metav1.NewRVDeletionPrecondition("userProvided")},
+			expectError:         true,
+			podPhase:            api.PodPending,
+			podName:             "t5",
 			expectedDeleteCount: retrySteps,
 		},
 	}
@@ -318,7 +333,6 @@ func TestEvictionIngorePDB(t *testing.T) {
 	for _, tc := range testcases {
 		t.Run(tc.name, func(t *testing.T) {
 			testContext := genericapirequest.WithNamespace(genericapirequest.NewContext(), metav1.NamespaceDefault)
-			//storage, _, statusStorage, server := newStorage(t)
 			ms := &mockStore{
 				deleteCount: 0,
 			}
@@ -336,13 +350,8 @@ func TestEvictionIngorePDB(t *testing.T) {
 
 			name := pod.Name
 			ms.pod = pod
-			df := tc.deleteFunc
-			if df == nil {
-				df = ms.mutatorDeleteFunc
-			}
-			ms.deleteFunc = df
+
 			_, err := evictionRest.Create(testContext, name, tc.eviction, nil, &metav1.CreateOptions{})
-			//_, err = evictionRest.Create(testContext, name, tc.eviction, nil, &metav1.CreateOptions{})
 			if (err != nil) != tc.expectError {
 				t.Errorf("expected error=%v, got %v; name %v", tc.expectError, err, pod.Name)
 				return
@@ -419,17 +428,37 @@ func resource(resource string) schema.GroupResource {
 	return schema.GroupResource{Group: "", Resource: resource}
 }
 
-type deleteFunc func(int) (runtime.Object, bool, error)
+//type deleteFunc func(int, *metav1.DeleteOptions) (runtime.Object, bool, error)
 
 type mockStore struct {
 	deleteCount int
-	deleteFunc  deleteFunc
 	pod         *api.Pod
 }
 
-func (ms *mockStore) mutatorDeleteFunc(count int) (runtime.Object, bool, error) {
+func (ms *mockStore) mutatorDeleteFunc(count int, options *metav1.DeleteOptions) (runtime.Object, bool, error) {
+	if ms.pod.Name == "t4" {
+		// Always return error for this pod
+		return nil, false, apierrors.NewConflict(resource("tests"), "2", errors.New("message"))
+	}
 	if count == 1 {
-		ms.pod.Status.Phase = api.PodRunning
+		// This is a hack to ensure that some test pods don't change phase
+		// but do change resource version
+		if ms.pod.Name != "t1" && ms.pod.Name != "t5" {
+			ms.pod.Status.Phase = api.PodRunning
+		}
+		ms.pod.ResourceVersion = "999"
+		// Always return conflict on the first attempt
+		return nil, false, apierrors.NewConflict(resource("tests"), "2", errors.New("message"))
+	}
+	// Compare enforce deletionOptions
+	if options == nil || options.Preconditions == nil || options.Preconditions.ResourceVersion == nil {
+		return nil, true, nil
+	} else if *options.Preconditions.ResourceVersion != "1000" {
+		// Here we're simulating that the pod has changed resource version again
+		// pod "t4" should make it here, this validates we're getting the latest
+		// resourceVersion of the pod and successfully delete on the next deletion
+		// attempt after this one.
+		ms.pod.ResourceVersion = "1000"
 		return nil, false, apierrors.NewConflict(resource("tests"), "2", errors.New("message"))
 	}
 	return nil, true, nil
@@ -445,7 +474,8 @@ func (ms *mockStore) Update(ctx context.Context, name string, objInfo rest.Updat
 
 func (ms *mockStore) Delete(ctx context.Context, name string, deleteValidation rest.ValidateObjectFunc, options *metav1.DeleteOptions) (runtime.Object, bool, error) {
 	ms.deleteCount++
-	return ms.deleteFunc(ms.deleteCount)
+	// return ms.deleteFunc(ms.deleteCount, options)
+	return ms.mutatorDeleteFunc(ms.deleteCount, options)
 	//return nil, false, nil
 }
 

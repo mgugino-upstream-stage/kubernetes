@@ -133,7 +133,7 @@ func (r *EvictionREST) Create(ctx context.Context, name string, obj runtime.Obje
 	if canIgnorePDB(pod) {
 		deleteRefresh := false
 		continueToPDBs := false
-		// Preserve current deletion options if we need to confirm fall through to checking PDBs later.
+		// Preserve current deletionOptions if we need to fall through to checking PDBs later.
 		preservedDeletionOptions := deletionOptions.DeepCopy()
 		err := retry.RetryOnConflict(EvictionsRetry, func() error {
 			if deleteRefresh {
@@ -153,7 +153,7 @@ func (r *EvictionREST) Create(ctx context.Context, name string, obj runtime.Obje
 					return nil
 				}
 			}
-			if shouldEnforceResourceVersion(pod) {
+			if shouldEnforceResourceVersion(pod) && resourceVersionIsUnset(preservedDeletionOptions) {
 				// Set deletionOptions.Preconditions.ResourceVersion to ensure we're not
 				// racing with another PDB-impacting process elsewhere.
 				if deletionOptions.Preconditions == nil {
@@ -260,6 +260,10 @@ func shouldEnforceResourceVersion(pod *api.Pod) bool {
 		return true
 	}
 	return false
+}
+
+func resourceVersionIsUnset(options *metav1.DeleteOptions) bool {
+	return options.Preconditions == nil || options.Preconditions.ResourceVersion == nil
 }
 
 // checkAndDecrement checks if the provided PodDisruptionBudget allows any disruption.
