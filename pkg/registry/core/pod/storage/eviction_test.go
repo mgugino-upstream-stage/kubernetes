@@ -22,25 +22,17 @@ import (
 	"testing"
 
 	policyv1beta1 "k8s.io/api/policy/v1beta1"
-	"k8s.io/apimachinery/pkg/api/apitesting"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metainternalversion "k8s.io/apimachinery/pkg/apis/meta/internalversion"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/runtime/serializer"
 	"k8s.io/apimachinery/pkg/watch"
-	examplev1 "k8s.io/apiserver/pkg/apis/example/v1"
 	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
-	"k8s.io/apiserver/pkg/registry/generic"
-	genericregistry "k8s.io/apiserver/pkg/registry/generic/registry"
 	"k8s.io/apiserver/pkg/registry/rest"
-	"k8s.io/apiserver/pkg/storage"
-	etcd3testing "k8s.io/apiserver/pkg/storage/etcd3/testing"
 	"k8s.io/client-go/kubernetes/fake"
 	api "k8s.io/kubernetes/pkg/apis/core"
 	"k8s.io/kubernetes/pkg/apis/policy"
-	"k8s.io/kubernetes/pkg/registry/registrytest"
 )
 
 func TestEviction(t *testing.T) {
@@ -214,41 +206,6 @@ func TestEviction(t *testing.T) {
 			}
 		})
 	}
-}
-
-type FailDeleteUpdateStorage struct {
-	storage.Interface
-}
-
-func (f FailDeleteUpdateStorage) Delete(ctx context.Context, key string, out runtime.Object, precondition *storage.Preconditions, validateDeletion storage.ValidateObjectFunc) error {
-	return storage.NewKeyNotFoundError(key, 0)
-}
-
-func (f FailDeleteUpdateStorage) GuaranteedUpdate(ctx context.Context, key string, ptrToType runtime.Object, ignoreNotFound bool,
-	preconditions *storage.Preconditions, tryUpdate storage.UpdateFunc, suggestion ...runtime.Object) error {
-	return storage.NewKeyNotFoundError(key, 0)
-}
-
-var scheme = runtime.NewScheme()
-var codecs = serializer.NewCodecFactory(scheme)
-
-func newFailDeleteUpdateStorage(t *testing.T) (*REST, *etcd3testing.EtcdTestServer) {
-	etcdStorage, server := registrytest.NewEtcdStorage(t, "")
-	restOptions := generic.RESTOptions{
-		StorageConfig:           etcdStorage,
-		Decorator:               generic.UndecoratedStorage,
-		DeleteCollectionWorkers: 3,
-		ResourcePrefix:          "pods",
-	}
-	storage, err := NewStorage(restOptions, nil, nil, nil)
-	if err != nil {
-		t.Fatalf("unexpected error from REST storage: %v", err)
-	}
-	storage.Pod.Store.Storage = genericregistry.DryRunnableStorage{
-		Storage: FailDeleteUpdateStorage{storage.Pod.Store.Storage.Storage},
-		Codec:   apitesting.TestStorageCodec(codecs, examplev1.SchemeGroupVersion),
-	}
-	return storage.Pod, server
 }
 
 func TestEvictionIngorePDB(t *testing.T) {
@@ -430,8 +387,6 @@ func resource(resource string) schema.GroupResource {
 	return schema.GroupResource{Group: "", Resource: resource}
 }
 
-//type deleteFunc func(int, *metav1.DeleteOptions) (runtime.Object, bool, error)
-
 type mockStore struct {
 	deleteCount int
 	pod         *api.Pod
@@ -466,19 +421,17 @@ func (ms *mockStore) mutatorDeleteFunc(count int, options *metav1.DeleteOptions)
 	return nil, true, nil
 }
 
+func (ms *mockStore) Delete(ctx context.Context, name string, deleteValidation rest.ValidateObjectFunc, options *metav1.DeleteOptions) (runtime.Object, bool, error) {
+	ms.deleteCount++
+	return ms.mutatorDeleteFunc(ms.deleteCount, options)
+}
+
 func (ms *mockStore) Watch(ctx context.Context, options *metainternalversion.ListOptions) (watch.Interface, error) {
 	return nil, nil
 }
 
 func (ms *mockStore) Update(ctx context.Context, name string, objInfo rest.UpdatedObjectInfo, createValidation rest.ValidateObjectFunc, updateValidation rest.ValidateObjectUpdateFunc, forceAllowCreate bool, options *metav1.UpdateOptions) (runtime.Object, bool, error) {
 	return nil, false, nil
-}
-
-func (ms *mockStore) Delete(ctx context.Context, name string, deleteValidation rest.ValidateObjectFunc, options *metav1.DeleteOptions) (runtime.Object, bool, error) {
-	ms.deleteCount++
-	// return ms.deleteFunc(ms.deleteCount, options)
-	return ms.mutatorDeleteFunc(ms.deleteCount, options)
-	//return nil, false, nil
 }
 
 func (ms *mockStore) Get(ctx context.Context, name string, options *metav1.GetOptions) (runtime.Object, error) {
