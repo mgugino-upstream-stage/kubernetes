@@ -41,7 +41,7 @@ const (
 	EvictionKind = "Eviction"
 	// EvictionSubresource represents the kind of evictions object as pod's subresource
 	EvictionSubresource = "pods/eviction"
-	podSkipMsgTemplate  = "pod %q has DeletionTimestamp older than %v seconds, skipping\n"
+	podSkipMsgTemplate  = "pod %s/%s has DeletionTimestamp older than %v seconds, skipping\n"
 )
 
 // Helper contains the parameters to control the behaviour of drainer
@@ -264,7 +264,7 @@ func (d *Helper) evictPods(pods []corev1.Pod, policyGroupVersion string, getPodF
 				select {
 				case <-ctx.Done():
 					// return here or we'll leak a goroutine.
-					returnCh <- fmt.Errorf("error when evicting pod %q: global timeout reached: %v", pod.Name, globalTimeout)
+					returnCh <- fmt.Errorf("error when evicting pod %s/%s: global timeout reached: %v", pod.Namespace, pod.Name, globalTimeout)
 					return
 				default:
 				}
@@ -275,10 +275,10 @@ func (d *Helper) evictPods(pods []corev1.Pod, policyGroupVersion string, getPodF
 					returnCh <- nil
 					return
 				} else if apierrors.IsTooManyRequests(err) {
-					fmt.Fprintf(d.ErrOut, "error when evicting pod %q (will retry after 5s): %v\n", pod.Name, err)
+					fmt.Fprintf(d.ErrOut, "error when evicting pod %s/%s (will retry after 5s): %v\n", pod.Namespace, pod.Name, err)
 					time.Sleep(5 * time.Second)
 				} else {
-					returnCh <- fmt.Errorf("error when evicting pod %q: %v", pod.Name, err)
+					returnCh <- fmt.Errorf("error when evicting pod %s/%s: %v", pod.Namespace, pod.Name, err)
 					return
 				}
 			}
@@ -302,7 +302,7 @@ func (d *Helper) evictPods(pods []corev1.Pod, policyGroupVersion string, getPodF
 			if err == nil {
 				returnCh <- nil
 			} else {
-				returnCh <- fmt.Errorf("error when waiting for pod %q terminating: %v", pod.Name, err)
+				returnCh <- fmt.Errorf("error when waiting for pod %s/%s terminating: %v", pod.Namespace, pod.Name, err)
 			}
 		}(pod, returnCh)
 	}
@@ -371,7 +371,7 @@ func waitForDelete(params waitForDeleteParams) ([]corev1.Pod, error) {
 				return false, err
 			} else {
 				if shouldSkipPod(*p, params.skipWaitForDeleteTimeoutSeconds) {
-					fmt.Fprintf(params.out, podSkipMsgTemplate, pod.Name, params.skipWaitForDeleteTimeoutSeconds)
+					fmt.Fprintf(params.out, podSkipMsgTemplate, pod.Namespace, pod.Name, params.skipWaitForDeleteTimeoutSeconds)
 					continue
 				}
 				pendingPods = append(pendingPods, pods[i])
